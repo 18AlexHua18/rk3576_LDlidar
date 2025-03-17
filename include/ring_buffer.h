@@ -8,21 +8,27 @@
 template <typename T>
 class RingBuffer {
 public:
-    RingBuffer(size_t size)
-    : buffer_(size), head_(0), tail_(0), count_(0), exit_flag_(false) {}
+    RingBuffer(size_t capacity) : 
+        buffer_(capacity), 
+        head_(0), 
+        tail_(0), 
+        count_(0), 
+        capacity_(capacity),
+        exit_(false) {}
     
     bool push(const T& item) {
         std::unique_lock<std::mutex> lock(mutex_);
         
-        if (count_ == buffer_.size()) {
-            return false;  // 缓冲区满
+        if (count_ == capacity_) {
+            // 缓冲区满
+            return false;
         }
         
         buffer_[tail_] = item;
-        tail_ = (tail_ + 1) % buffer_.size();
+        tail_ = (tail_ + 1) % capacity_;
         ++count_;
         
-        lock.unlock();
+        // 通知等待的消费者有新数据可用
         cond_.notify_one();
         return true;
     }
@@ -31,50 +37,54 @@ public:
         std::unique_lock<std::mutex> lock(mutex_);
         
         while (count_ == 0) {
-            if (exit_flag_) {
-                return false;  // 退出标志设置，不再等待
+            // 如果设置了退出标志且缓冲区为空，直接返回失败
+            if (exit_) {
+                return false;
             }
+            
+            // 等待生产者添加数据
             cond_.wait(lock);
+            
+            // 再次检查退出标志
+            if (exit_ && count_ == 0) {
+                return false;
+            }
         }
         
         item = buffer_[head_];
-        head_ = (head_ + 1) % buffer_.size();
+        head_ = (head_ + 1) % capacity_;
         --count_;
-        
         return true;
     }
     
+    void setExit(bool exit) {
+        exit_ = exit;
+        // 通知所有等待的线程
+        cond_.notify_all();
+    }
+    
     size_t size() const {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::unique_lock<std::mutex> lock(mutex_);
         return count_;
     }
     
-    void setExit(bool flag) {
-        exit_flag_ = flag;
-        cond_.notify_all();  // 唤醒所有等待线程
-    }
-    
     bool empty() const {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::unique_lock<std::mutex> lock(mutex_);
         return count_ == 0;
     }
     
     bool full() const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return count_ == buffer_.size();
+        std::unique_lock<std::mutex> lock(mutex_);
+        return count_ == capacity_;
     }
-
-    // 返回缓冲区总容量
-    size_t capacity() const {
-        return buffer_.size();
-    }
-
+    
 private:
     std::vector<T> buffer_;
     size_t head_;
     size_t tail_;
     size_t count_;
+    size_t capacity_;
     mutable std::mutex mutex_;
     std::condition_variable cond_;
-    std::atomic<bool> exit_flag_;
+    std::atomic<bool> exit_;
 };

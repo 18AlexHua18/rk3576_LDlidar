@@ -2,9 +2,9 @@
 
 #include <stdint.h>
 #include <vector>
-#include <array>
-#include <cstddef>  // 添加此头文件以支持 size_t 类型
 #include <string>
+#include <cstddef>
+#include <sstream>
 
 // 点的数据结构
 struct Point3D {
@@ -55,24 +55,26 @@ public:
     }
 };
 
-// 激光雷达参数
+// 雷达参数结构
 struct LidarParam {
-    uint32_t index;
-    float x;
-    float y;
-    float z;
-    std::string name;
-    std::string topic;
-    uint32_t ipaddr;
+    int index;          // 雷达索引
+    std::string name;   // 雷达名称
+    uint32_t ipaddr;    // IP地址
+    float x;            // X坐标偏移
+    float y;            // Y坐标偏移
+    float z;            // Z坐标偏移
+    std::string topic;  // 话题名称
     
-    LidarParam() : index(0), x(0.0f), y(0.0f), z(0.0f), 
-                  name("default"), topic("points"), ipaddr(0) {}
+    // 默认构造函数
+    LidarParam() : index(0), ipaddr(0), x(0.0f), y(0.0f), z(0.0f) {}
     
+    // 转换为字符串用于日志输出
     std::string toString() const {
-        return "LidarParam: " + std::to_string(index) + " " + 
-               std::to_string(x) + " " + std::to_string(y) + " " + 
-               std::to_string(z) + " " + name + " " + topic + " " + 
-               std::to_string(ipaddr);
+        return "LidarParam{name=" + name + 
+               ", ipaddr=" + std::to_string(ipaddr) + 
+               ", pos=(" + std::to_string(x) + "," + 
+               std::to_string(y) + "," + 
+               std::to_string(z) + ")}";
     }
 };
 

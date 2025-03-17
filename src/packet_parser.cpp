@@ -1,283 +1,433 @@
 #include "packet_parser.h"
 #include "logger.h"
-#include <arpa/inet.h>
-#include <algorithm>
-#include <cstring>
+#include "config.h"
 #include <cmath>
-#include <cstddef>  // 添加对size_t的支持
-#include <netinet/in.h>
+#include <cstring>
+#include <cstddef>
+#include <arpa/inet.h>
 
-// 包大小常量
-constexpr int BIG_PACKET_SIZE = 1418;
+// 检查是否定义了点云过滤宏
+#ifndef ENABLE_POINT_FILTERING
+#define ENABLE_POINT_FILTERING 0
+#endif
 
-PacketParser::PacketParser() 
-    : currentFrameId(0), frameInProgress(false), 
-      cloudWidth(LD_LM_LIDAR_WIDTH), cloudHeight(LD_LM_LIDAR_HEIGHT),
-      packetCount(0)
+PacketParser::PacketParser()
+    : currentFrameId(0), frameInProgress(false),
+      cloudWidth(PacketConfig::LD_LM_LIDAR_WIDTH),
+      cloudHeight(PacketConfig::LD_LM_LIDAR_HEIGHT),
+      packetCount(0), processed_points_(0)
 {
     // 初始化算法参数
     algorithmParam.EnableEchoChose = 1;
     algorithmParam.EchoNumber = 5;
-    
+
     // 初始化点云存储空间
-    points.resize(cloudWidth * cloudHeight * EchoNumberOfPixel);
-    
+    points.resize(cloudWidth * cloudHeight * PacketConfig::EchoNumberOfPixel);
+
     // 初始化3D点云数据结构
     pointData_.resize(cloudHeight);
-    for (int i = 0; i < cloudHeight; i++) {
+    for (int i = 0; i < cloudHeight; i++)
+    {
         pointData_[i].resize(cloudWidth);
-        for (int j = 0; j < cloudWidth; j++) {
-            pointData_[i][j].resize(EchoNumberOfPixel);
+        for (int j = 0; j < cloudWidth; j++)
+        {
+            pointData_[i][j].resize(PacketConfig::EchoNumberOfPixel);
         }
     }
 }
 
-PacketParser::~PacketParser() {
+PacketParser::~PacketParser()
+{
     // 清理资源
 }
 
-void PacketParser::setLidarParam(const LidarParam& param) {
-    this->lidarParam = param;
+void PacketParser::setLidarParam(const LidarParam &param)
+{
+    lidarParam = param;
     LD_INFO << "设置雷达参数: " << param.toString();
 }
 
-bool PacketParser::parsePacket(const uint8_t* data, size_t size, PointCloud& cloud) {
+bool PacketParser::isValidMessage(size_t size)
+{
+    if (size != PacketConfig::BIG_PACKET_SIZE)
+    {
+        LD_ERROR << "无效的数据包大小: " << size << " 字节, 预期: "
+                 << PacketConfig::BIG_PACKET_SIZE << " 字节";
+        return false;
+    }
+    return true;
+}
+
+bool PacketParser::parsePacket(const uint8_t *data, size_t size, PointCloud &cloud)
+{
     // 检查是否为有效的雷达数据包
-    if (!isValidMessage(size)) {
+    if (!isValidMessage(size))
+    {
         return false;
     }
 
-    const Gen2Packet* packet = reinterpret_cast<const Gen2Packet*>(data);
-    
+    const Gen2Packet *packet = reinterpret_cast<const Gen2Packet *>(data);
+
     // 检查帧ID，如果是新帧则重置
-    if (!frameInProgress || packet->head.frameId != currentFrameId) {
+    if (!frameInProgress || packet->head.frameId != currentFrameId)
+    {
         currentFrameId = packet->head.frameId;
         frameInProgress = true;
         packets_[currentFrameId] = 0;
         frameCloud.points.clear();
+        receivedSubframes.clear(); // 清除子帧记录
+        LD_INFO << "开始新帧: 帧ID=" << currentFrameId;
     }
-    
+
     // 增加当前帧的包计数
     packets_[currentFrameId]++;
-    
+
+    // 记录已收到的子帧和起始列
+    receivedSubframes.insert(std::make_pair(packet->head.subFrameId, packet->head.startColId));
+
     // 添加日志以检查包的关键信息
-    LD_DEBUG << "处理数据包: 子帧ID=" << (int)packet->head.subFrameId 
-             << ", 起始列=" << (int)packet->head.startColId 
-             << ", 帧ID=" << packet->head.frameId;
+    LD_DEBUG << "处理数据包: 子帧ID=" << (int)packet->head.subFrameId
+             << ", 起始列=" << (int)packet->head.startColId
+             << ", 帧ID=" << packet->head.frameId
+             << ", 当前包数=" << packets_[currentFrameId];
 
     // 处理有效的雷达数据包
     processPacket(packet);
-    
+
     // 检查是否为当前帧的结束包
     bool frame_end = isFrameEnd(packet);
-    if (frame_end) {
-        LD_INFO << "检测到帧结束标记，帧ID: " << packet->head.frameId
-                << ", 包数: " << packets_[currentFrameId];
-        
-        // 检查帧完整性 - 确保我们收到了足够多的包
-        if (packets_[currentFrameId] >= 1600) { // 一个完整帧通常有约1664个包
+
+    // 计算子帧覆盖率
+    int expectedSubframes = 32;                                                                           // 预期子帧数为32（0-31）
+    float subframeCompleteness = static_cast<float>(receivedSubframes.size()) / (expectedSubframes * 52); // 32个子帧 * 52列
+
+    // 更合理的帧结束判断
+    if (packets_[currentFrameId] > 1000 && subframeCompleteness > 0.9)
+    {
+        LD_INFO << "帧数据已达到90%完整度，认为帧结束: 帧ID=" << currentFrameId
+                << ", 包数=" << packets_[currentFrameId]
+                << ", 子帧覆盖率=" << subframeCompleteness * 100 << "%";
+        frame_end = true;
+    }
+
+    // 如果收到了大量包但子帧覆盖不完整，也可能是数据丢失，此时也结束帧
+    if (packets_[currentFrameId] > 1800 && !frame_end)
+    {
+        LD_WARN << "收到大量包但帧未完成，可能存在数据丢失，强制结束帧: 帧ID=" << currentFrameId
+                << ", 包数=" << packets_[currentFrameId]
+                << ", 子帧覆盖率=" << subframeCompleteness * 100 << "%";
+        frame_end = true;
+    }
+
+    // 检查是否已接收到足够多的子帧
+    if (receivedSubframes.size() >= expectedSubframes * 50)
+    { // 接近完整覆盖所有子帧和列
+        LD_INFO << "接收到足够多的子帧和列，认为帧结束: 帧ID=" << currentFrameId
+                << ", 子帧记录数=" << receivedSubframes.size();
+        frame_end = true;
+    }
+
+    if (frame_end)
+    {
+        LD_INFO << "检测到帧结束，帧ID: " << packet->head.frameId
+                << ", 包数: " << packets_[currentFrameId]
+                << ", 子帧记录数: " << receivedSubframes.size();
+
+        // 检查帧完整性 - 降低要求，如果有超过800个包也开始处理
+        if (packets_[currentFrameId] >= 800)
+        { // 降低阈值，之前是1600
             // 构建点云
             buildPointCloud(cloud);
-            
+
             // 检查点云大小
-            if (cloud.points.empty()) {
+            if (cloud.points.empty())
+            {
                 LD_WARN << "帧完整，但点云构建后为空！检查点云过滤条件。";
-                
+
                 // 添加额外诊断信息
                 int validPointCount = 0;
-                for (int row = 0; row < cloudHeight; ++row) {
-                    for (int col = 0; col < cloudWidth; ++col) {
-                        for (int echo = 0; echo < 3; ++echo) {
-                            // 获取对应位置的点
-                            Point3D& point = pointData_[row][col][echo];
-                            // 计算有效点(非零点)数量
-                            if (point.x != 0.0f || point.y != 0.0f || point.z != 0.0f) {
+                for (int row = 0; row < cloudHeight; ++row)
+                {
+                    for (int col = 0; col < cloudWidth; ++col)
+                    {
+                        for (int echo = 0; echo < 3; ++echo)
+                        {
+                            Point3D &point = pointData_[row][col][echo];
+                            if (point.x != 0.0f || point.y != 0.0f || point.z != 0.0f)
+                            {
+                                cloud.points.push_back(point);
                                 validPointCount++;
                             }
                         }
                     }
                 }
-                LD_INFO << "有效点(非零坐标)数量: " << validPointCount;
-            } else {
+
+                if (validPointCount > 0)
+                {
+                    LD_INFO << "手动添加有效点后，点云大小: " << cloud.points.size();
+                }
+            }
+            else
+            {
                 LD_INFO << "帧完整，点云大小: " << cloud.points.size();
             }
 
             // 重置当前帧
             frameInProgress = false;
             return true;
-        } else {
-            LD_WARN << "帧数据不完整，接收到 " << packets_[currentFrameId] 
-                    << " 个包，预期至少 1600 个";
+        }
+        else
+        {
+            LD_WARN << "帧数据不完整，接收到 " << packets_[currentFrameId]
+                    << " 个包，预期至少 800 个";
+            // 即使不完整，如果有一些包，也尝试构建点云
+            if (packets_[currentFrameId] > 100)
+            {
+                buildPointCloud(cloud);
+                if (!cloud.points.empty())
+                {
+                    LD_INFO << "尽管帧不完整，但仍然构建出点云，大小: " << cloud.points.size();
+                    frameInProgress = false;
+                    return true;
+                }
+            }
             // 重置当前帧
             frameInProgress = false;
             return false;
         }
     }
-    
+
     return false;
 }
 
-void PacketParser::buildPointCloud(PointCloud& cloud) {
-    cloud.points.clear();
-    cloud.frame_id = currentFrameId;
-    
-    // 添加诊断日志
+void PacketParser::transformPoint(float &x, float &y, float &z)
+{
+    float temp_x = x;
+    float temp_y = y;
+    float temp_z = z;
+
+    // 使用lidarParam进行点云变换
+    x = temp_x;
+    y = temp_y;
+    z = temp_z;
+
+    // 如果lidarParam有坐标偏移，则应用它
+    if (lidarParam.x != 0.0f || lidarParam.y != 0.0f || lidarParam.z != 0.0f)
+    {
+        x += lidarParam.x;
+        y += lidarParam.y;
+        z += lidarParam.z;
+    }
+
+    // 这里可以添加更复杂的变换，如旋转等
+}
+
+// 构建点云
+void PacketParser::buildPointCloud(PointCloud &cloud)
+{
     LD_DEBUG << "开始构建点云，帧ID: " << currentFrameId;
-    
-    // 计数有效点和无效点
-    int validPoints = 0;
-    int invalidPoints = 0;
-    
-    for (int row = 0; row < cloudHeight; ++row) {
-        for (int col = 0; col < cloudWidth; ++col) {
-            for (int echo = 0; echo < EchoNumberOfPixel; ++echo) { // 每个像素有3个回波
-                // 获取对应位置的点
-                Point3D& point = pointData_[row][col][echo];
-                
-                // 跳过无效点 (坐标全为0的点)
-                if (point.x == 0.0f && point.y == 0.0f && point.z == 0.0f) {
-                    invalidPoints++;
-                    continue;
+
+    cloud.clear();
+    cloud.frame_id = currentFrameId;
+
+    int validPointCount = 0;
+    int invalidPointCount = 0;
+    int zeroPointCount = 0;
+
+    // 预先分配空间以提高效率
+    cloud.points.reserve(cloudWidth * cloudHeight * EchoNumberOfPixel / 2);
+
+    // 遍历点云数据
+    for (int row = 0; row < cloudHeight; ++row)
+    {
+        for (int col = 0; col < cloudWidth; ++col)
+        {
+            for (int echo = 0; echo < EchoNumberOfPixel; ++echo)
+            {
+                Point3D &point = pointData_[row][col][echo];
+
+                // 筛选有效点
+                if (point.x != 0.0f || point.y != 0.0f || point.z != 0.0f)
+                {
+                    cloud.points.push_back(point);
+                    validPointCount++;
                 }
-                
-                // 添加有效点到点云
-                cloud.points.push_back(point);
-                validPoints++;
-            }
-        }
-    }
-    
-    LD_DEBUG << "点云构建完成，有效点: " << validPoints << ", 无效点: " << invalidPoints;
-}
-
-bool PacketParser::isValidMessage(size_t size) {
-    return size >= sizeof(Gen2Packet);
-}
-
-bool PacketParser::isFrameEnd(const Gen2Packet* packet) {
-    // 帧的最后一个包: subFrameId = 31, startColId = 255
-    return (packet->head.subFrameId == 31 && packet->head.startColId == 255);
-}
-
-void PacketParser::processPacket(const Gen2Packet* packet) {
-    uint8_t subFrameId = packet->head.subFrameId;
-    uint8_t startCol = packet->head.startColId;
-    int curRow = 0;
-    int curCol = 0;
-    int colNum = (startCol == 255) ? 1 : 5; // 根据老代码逻辑调整
-    
-    // 添加调试日志
-    LD_DEBUG << "处理子帧: " << (int)subFrameId << ", 起始列: " << (int)startCol;
-    
-    // 遍历数据包中的有效载荷
-    for (int col = 0; col < colNum; ++col) {
-        for (int row = 0; row < 6; ++row) {
-            const Payload& payload = packet->payload[col * 6 + row];
-            curRow = subFrameId * 6 + row;
-            curCol = startCol + col;
-            
-            // 确保索引在有效范围内
-            if (curRow >= 0 && curRow < cloudHeight && 
-                curCol >= 0 && curCol < cloudWidth) {
-                
-                // 处理每个回波
-                for (int echoId = 0; ++echoId < EchoNumberOfPixel; ++echoId) {
-                    // 参照旧项目中的点云提取逻辑，从payload中获取xyz和intensity
-                    int16_t x = ntohs(payload.GetX(echoId));
-                    int16_t y = ntohs(payload.GetY(echoId));
-                    int16_t z = ntohs(payload.GetZ(echoId));
-                    uint8_t intensity = payload.GetReflectivity(echoId); 
-                    
-                    // 将点数据保存到点云数组
-                    Point3D& point = pointData_[curRow][curCol][echoId];
-                    point.x = static_cast<float>(x) / 512.0f;
-                    point.y = static_cast<float>(y) / 512.0f;
-                    point.z = static_cast<float>(z) / 512.0f;
-                    point.intensity = intensity;
-                    
-                    // 根据回波选择算法判断是否保留该点
-                    if (algorithmParam.EnableEchoChose && payload.GetEchoChoiseLabel(echoId) == 0) {
-                        // 置为零点（无效点）
-                        point.x = 0.0f;
-                        point.y = 0.0f;
-                        point.z = 0.0f;
-                        point.intensity = 0;
-                    }
+                else
+                {
+                    zeroPointCount++;
                 }
             }
         }
     }
+
+    // 更新点云元数据
+    cloud.width = cloud.points.size();
+    cloud.height = 1;
+    cloud.is_dense = false;
+
+    LD_INFO << "点云构建完成，有效点: " << validPointCount
+            << ", 无效点: " << invalidPointCount
+            << ", 原始零点: " << zeroPointCount;
 }
 
-void PacketParser::setCloudPoint(const Gen2Packet* packet) {
+// 检查是否是一帧的结束
+bool PacketParser::isFrameEnd(const Gen2Packet *packet)
+{
+    // 帧结束标志：子帧ID为31且起始列为255
+    bool isEnd = (packet->head.subFrameId == 31 && packet->head.startColId == 255);
+
+    if (isEnd)
+    {
+        LD_INFO << "检测到帧结束标记: subFrameId=" << (int)packet->head.subFrameId
+                << ", startColId=" << (int)packet->head.startColId;
+    }
+
+    return isEnd;
+}
+
+// 处理数据包
+void PacketParser::processPacket(const Gen2Packet *packet)
+{
+    // 提取子帧ID和起始列ID
     uint8_t subFrameId = packet->head.subFrameId;
-    uint8_t startCol = packet->head.startColId;
-    int colNum = (startCol == 255) ? 1 : 5;
-    
-    for (int col = 0; col < colNum; ++col) {
-        for (int row = 0; row < 6; ++row) {
-            const Payload& payload = packet->payload[col * 6 + row];
+    uint8_t startColId = packet->head.startColId;
+
+    // 更新最大子帧ID和起始列ID
+    if (subFrameId > maxSubFrameId)
+        maxSubFrameId = subFrameId;
+    if (startColId > maxStartColId)
+        maxStartColId = startColId;
+
+    LD_DEBUG << "处理子帧: " << (int)subFrameId << ", 起始列: " << (int)startColId;
+
+    // 获取列数
+    int colNum = (startColId == 255) ? 1 : 5;
+
+    // 处理每一列和每一行的数据
+    for (int col = 0; col < colNum; ++col)
+    {
+        for (int row = 0; row < 6; ++row)
+        {
+            const Payload &payload = packet->payload[col * 6 + row];
+
+            // 计算当前行和列的全局索引
             int curRow = subFrameId * 6 + row;
-            int curCol = startCol + col;
-            
-            // 确保索引有效
-            if (curRow >= MAXCLOUDROW || curCol >= LD_LM_LIDAR_WIDTH) {
+            int curCol = startColId + col;
+
+            // 确保不越界
+            if (curRow >= cloudHeight || curCol >= cloudWidth)
+            {
                 continue;
             }
-            
-            for (int echoId = 0; echoId < EchoNumberOfPixel; ++echoId) {
-                int16_t x = ntohs(payload.x[echoId]);
-                int16_t y = ntohs(payload.y[echoId]);
-                int16_t z = ntohs(payload.z[echoId]);
-                uint8_t intensity = payload.reflectivity[echoId];
-                
+
+            // 处理每个回波的数据
+            for (int echoId = 0; echoId < EchoNumberOfPixel; ++echoId)
+            {
+                // 从payload中读取原始坐标数据
+                int16_t x = ntohs(payload.GetX(echoId));
+                int16_t y = ntohs(payload.GetY(echoId));
+                int16_t z = ntohs(payload.GetZ(echoId));
+                uint8_t intensity = payload.GetReflectivity(echoId);
+
                 // 计算点的索引
-                int globalIndex = (curRow * LD_LM_LIDAR_WIDTH + curCol) * EchoNumberOfPixel + echoId;
-                
+                int globalIndex = (curRow * cloudWidth + curCol) * EchoNumberOfPixel + echoId;
+
                 // 确保不越界
-                if (globalIndex >= points.size()) {
+                if (globalIndex >= points.size())
+                {
                     continue;
                 }
-                
+
                 // 转换坐标
                 float x_f = static_cast<float>(x / 512.0);
                 float y_f = static_cast<float>(y / 512.0);
                 float z_f = static_cast<float>(z / 512.0);
-                
-                // 应用回波选择算法
+
+                // 保存坐标和强度
+                Point3D &point = pointData_[curRow][curCol][echoId];
+
+#if ENABLE_POINT_FILTERING
+                // 应用回波选择算法（仅在启用过滤时）
                 bool validPoint = true;
-                if (algorithmParam.EnableEchoChose == 1) {
-                    if (payload.echoLabel[echoId].BIT.echoChose == 0) {
-                        validPoint = false;
-                    }
-                } else if (algorithmParam.EchoNumber == 1 || 
-                          algorithmParam.EchoNumber == 2 || 
-                          algorithmParam.EchoNumber == 3) {
-                    if (echoId != algorithmParam.EchoNumber - 1) {
-                        validPoint = false;
-                    }
-                } else if (algorithmParam.EchoNumber == 4) {
-                    if (echoId > 2) {
+                if (algorithmParam.EnableEchoChose == 1)
+                {
+                    if (payload.GetEchoChoiseLabel(echoId) == 0)
+                    {
                         validPoint = false;
                     }
                 }
-                
-                // 如果是有效点，则添加到当前帧的点云中
-                if (validPoint && (x_f != 0 || y_f != 0 || z_f != 0)) {
-                    // 变换坐标
-                    float transformed_x = x_f + lidarParam.x;
-                    float transformed_y = y_f + lidarParam.y;
-                    float transformed_z = z_f + lidarParam.z;
-                    
-                    Point3D point;
-                    point.x = transformed_x;
-                    point.y = transformed_y;
-                    point.z = transformed_z;
+                else if (algorithmParam.EchoNumber >= 1 && algorithmParam.EchoNumber <= 3)
+                {
+                    if (echoId != algorithmParam.EchoNumber - 1)
+                    {
+                        validPoint = false;
+                    }
+                }
+                else if (algorithmParam.EchoNumber == 4)
+                {
+                    if (echoId > 2)
+                    {
+                        validPoint = false;
+                    }
+                }
+
+                if (validPoint)
+                {
+                    // 应用坐标变换
+                    float new_x = x_f;
+                    float new_y = y_f;
+                    float new_z = z_f;
+
+                    transformPoint(new_x, new_y, new_z);
+
+                    point.x = new_x;
+                    point.y = new_y;
+                    point.z = new_z;
                     point.intensity = intensity;
-                    
-                    frameCloud.points.push_back(point);
+                    processed_points_++;
                 }
+                else
+                {
+                    // 无效点设置为零
+                    point.x = 0.0f;
+                    point.y = 0.0f;
+                    point.z = 0.0f;
+                    point.intensity = 0;
+                }
+#else
+                // 禁用过滤，所有点都保留
+                // 应用坐标变换
+                float new_x = x_f;
+                float new_y = y_f;
+                float new_z = z_f;
+
+                transformPoint(new_x, new_y, new_z);
+
+                point.x = new_x;
+                point.y = new_y;
+                point.z = new_z;
+                point.intensity = intensity;
+                processed_points_++;
+#endif
             }
         }
     }
+}
+
+// 输出诊断信息
+void PacketParser::printDiagnostics()
+{
+    LD_INFO << "诊断信息：已处理点数=" << processed_points_
+            << ", 当前帧ID=" << currentFrameId
+            << ", 当前帧包数=" << (packets_.count(currentFrameId) ? packets_[currentFrameId] : 0)
+            << ", 最大子帧ID=" << (int)maxSubFrameId
+            << ", 最大起始列ID=" << (int)maxStartColId;
+}
+
+// 导出帧数据
+void PacketParser::dumpFrameData(const std::string &filename)
+{
+    // 此处实现将当前帧数据保存到文件的功能
+    // 暂时留空，根据需要实现
+    LD_INFO << "帧数据导出功能未实现: " << filename;
 }

@@ -30,6 +30,18 @@ if(NOT SOURCES)
     set(SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp)
 endif()
 
+# 点云过滤选项（默认关闭）
+option(ENABLE_POINT_FILTERING "Enable point cloud filtering" OFF)
+
+# 如果启用了点云过滤，添加相应的编译定义
+if(ENABLE_POINT_FILTERING)
+    add_definitions(-DENABLE_POINT_FILTERING=1)
+    message(STATUS "Point cloud filtering: ENABLED")
+else()
+    add_definitions(-DENABLE_POINT_FILTERING=0)
+    message(STATUS "Point cloud filtering: DISABLED")
+endif()
+
 # Add the executable
 add_executable(rk3576_LDlidar ${SOURCES})
 
