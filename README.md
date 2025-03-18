@@ -6,6 +6,21 @@
 
 ## 编译选项
 
+构建说明
+使用以下命令构建Debug版本（用于gdbserver调试）：
+```sh
+mkdir -p build_debug && cd build_debug
+cmake -DCMAKE_BUILD_TYPE=Debug ..
+make
+```
+使用以下命令构建Release版本（用于生产环境）：
+```sh
+mkdir -p build_release && cd build_release
+cmake -DCMAKE_BUILD_TYPE=Release ..
+make
+```
+Debug版本包含完整的调试信息，可以与gdbserver一起使用，而Release版本进行了代码优化以提高性能。
+
 ### 点云过滤功能
 
 项目提供了对点云数据进行过滤的功能，默认情况下该功能是关闭的，以保证捕获所有可能的点。

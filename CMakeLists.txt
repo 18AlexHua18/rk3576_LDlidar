@@ -7,6 +7,18 @@ set(CMAKE_TOOLCHAIN_FILE ${CMAKE_CURRENT_SOURCE_DIR}/rk3576-toolchain.cmake CACH
 # Set the project name
 project(rk3576_LDlidar)
 
+# 设置构建类型，如果未指定则默认为Release
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build (Debug or Release)" FORCE)
+endif()
+
+# 设置Debug和Release的编译选项
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O2")
+
+# 显示当前构建类型
+message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+
 # Specify the C++ standard
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
