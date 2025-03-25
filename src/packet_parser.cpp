@@ -75,7 +75,8 @@ bool PacketParser::parsePacket(const uint8_t *data, size_t size, PointCloud &clo
     {
         LD_WARN << "检测到新帧ID(" << ntohl(packet->head.frameId)
                 << ")，但上一帧(" << currentFrameId
-                << ")仅接收到" << packets_[currentFrameId] << "个包，强制结束上一帧";
+
+        << ")仅接收到" << packets_[currentFrameId] << "个包，强制结束上一帧";
 
         // 处理未完成的上一帧数据
         if (packets_[currentFrameId] > 0)
