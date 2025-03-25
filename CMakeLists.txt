@@ -12,16 +12,29 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build (Debug or Release)" FORCE)
 endif()
 
-# 设置Debug和Release的编译选项
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O2")
+# 确保调试标志被正确应用
+string(TOUPPER "${CMAKE_BUILD_TYPE}" uppercase_CMAKE_BUILD_TYPE)
+if(uppercase_CMAKE_BUILD_TYPE MATCHES "DEBUG")
+    # 直接设置完整的调试标志，而不是追加
+    set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -ggdb3 -fno-omit-frame-pointer")
+    # 额外设置通用标志以确保调试信息被包含
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g")
+    message(STATUS "Debug flags: ${CMAKE_CXX_FLAGS_DEBUG}")
+else()
+    set(CMAKE_CXX_FLAGS_RELEASE "-O2")
+endif()
 
-# 显示当前构建类型
+# 显示当前构建类型和标志
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+message(STATUS "CXX flags: ${CMAKE_CXX_FLAGS}")
+message(STATUS "CXX ${CMAKE_BUILD_TYPE} flags: ${CMAKE_CXX_FLAGS_${uppercase_CMAKE_BUILD_TYPE}}")
 
 # Specify the C++ standard
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
+
+# 确保不会剥离调试符号
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -rdynamic")
 
 # 设置可执行文件输出路径
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)

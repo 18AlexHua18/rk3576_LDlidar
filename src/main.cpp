@@ -68,7 +68,7 @@ void processThread()
                 ipaddr = packet_data[0];
             }
 
-            // 创建或获取对应的解析器
+            // 创建或获取对应的解析器用于多雷达测试
             if (g_parsers.find(ipaddr) == g_parsers.end())
             {
                 LD_INFO << "新检测到雷达，IP后缀: " << ipaddr;
@@ -101,6 +101,8 @@ void processThread()
                 LD_INFO << "初始化雷达参数: " << param.toString();
             }
 
+            //TODO 在这里可以检查每一个点云处理的时间，如果太长可以考虑写一个自动扩增buffer的机制
+
             // 解析数据包
             PointCloud cloud;
             if (g_parsers[ipaddr]->parsePacket(packet_data.data() + 4,
@@ -119,31 +121,19 @@ void processThread()
 // 点云回调函数，展示点云信息并可选保存
 void cloudCallback(const PointCloud &cloud)
 {
-    // static int counter = 0;
-    // counter++;
 
-    // // 每10帧输出一次信息
-    // if (counter % 10 == 0)
-    // {
-    //     LD_INFO << "已处理点云帧: " << counter << ", 点数: " << cloud.points.size();
-    // }
-
-    // 注意：不再在这里保存点云，因为已经在processCloud中完成
-    // 如果仍然需要手动触发保存，可以保留以下代码并添加条件
-    // if (counter % CloudConfig::save_interval == 0 && CloudConfig::save_enabled && CloudConfig::manual_save) {
-    //     g_processor.WriteCloud(cloud, CloudConfig::save_path);
-    // }
 }
 
 int main(int argc, char **argv)
 {
     LD_INFO << "RK3576 激光雷达点云处理工具 v" << GlobalConfig::Version;
 
-    // 创建输出目录
-    mkdir(CloudConfig::save_path.c_str(), 0755);
+    // 在程序开始时创建保存目录
+    PointCloudProcessor::ensureDirectoryExists(CloudConfig::save_path);
 
     // 设置信号处理
     signal(SIGINT, signalHandler);
+
     signal(SIGTERM, signalHandler);
 
     // 解析命令行参数 (端口等)

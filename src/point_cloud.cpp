@@ -10,6 +10,7 @@
 #include <sys/types.h>
 #include <cstring>
 #include <chrono>
+#include <config.h>
 
 PointCloudProcessor::PointCloudProcessor() : is_new_frame_(false) {}
 
@@ -19,6 +20,8 @@ void PointCloudProcessor::setCallback(PointCloudCallback callback)
 {
     callback_ = callback;
 }
+
+
 
 void PointCloudProcessor::processCloud(const PointCloud &cloud)
 {
@@ -30,7 +33,7 @@ void PointCloudProcessor::processCloud(const PointCloud &cloud)
         std::tm *now_tm = std::localtime(&now);
 
         std::stringstream ss;
-        ss << "point_clouds/" << std::put_time(now_tm, "%Y%m%d");
+        ss << CloudConfig::save_path << std::put_time(now_tm, "%Y%m%d");
         std::string save_dir = ss.str();
 
         // 保存点云到文件
@@ -60,22 +63,62 @@ bool PointCloudProcessor::ensureDirectoryExists(const std::string &path)
     // 检查目录是否已存在
     if (stat(path.c_str(), &info) == 0)
     {
+        // 路径存在，检查是否是目录
         if (info.st_mode & S_IFDIR)
         {
-            return true; // 目录存在
+            return true; // 目录已存在
         }
-        return false; // 存在但不是目录
+        else
+        {
+            // 存在但不是目录，尝试删除并重新创建
+            LD_WARN << "路径存在但不是目录，尝试删除并重新创建: " << path;
+            if (remove(path.c_str()) != 0)
+            {
+                LD_ERROR << "无法删除非目录文件: " << path << ", 错误: " << strerror(errno);
+                return false;
+            }
+            // 文件已删除，下面会继续尝试创建目录
+        }
+    }
+    else if (errno != ENOENT)
+    {
+        // 如果错误不是"不存在"，而是其他错误（如权限问题），则返回失败
+        LD_ERROR << "检查目录时出错: " << path << ", 错误: " << strerror(errno);
+        return false;
     }
 
-    // 尝试创建目录
-    if (mkdir(path.c_str(), 0755) == 0)
+    // 到这里说明目录不存在或已被删除，先递归创建父目录
+    size_t pos = path.find_last_of('/');
+    if (pos != std::string::npos && pos > 0) // 确保pos > 0避免根目录问题
+    {
+        std::string parent = path.substr(0, pos);
+        if (!parent.empty() && !ensureDirectoryExists(parent))
+        {
+            return false; // 创建父目录失败
+        }
+    }
+
+    // 创建当前目录
+    int result = mkdir(path.c_str(), 0755);
+    if (result == 0)
     {
         LD_INFO << "创建目录: " << path;
         return true;
     }
-
-    LD_ERROR << "创建目录失败: " << path << ", 错误: " << strerror(errno);
-    return false;
+    else
+    {
+        // 如果失败，但失败原因是目录已存在，仍然认为成功
+        if (errno == EEXIST)
+        {
+            // 再次检查是否为目录
+            if (stat(path.c_str(), &info) == 0 && (info.st_mode & S_IFDIR))
+            {
+                return true;
+            }
+        }
+        LD_ERROR << "创建目录失败: " << path << ", 错误: " << strerror(errno);
+        return false;
+    }
 }
 
 // 实现新的WriteCloud方法

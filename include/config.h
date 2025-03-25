@@ -33,7 +33,7 @@ namespace PacketConfig {
 // 点云处理配置命名空间
 namespace CloudConfig {
     const bool save_enabled = true;           // 是否保存点云
-    const std::string save_path = "/usr/download/point_clouds"; // 点云保存路径
+    const std::string save_path = "/usr/download/point_clouds/"; // 点云保存路径
     const int save_interval = 10;             // 保存间隔（帧数）
     const bool filter_enabled = true;         // 是否启用滤波
     const float filter_threshold = 0.1f;      // 滤波阈值

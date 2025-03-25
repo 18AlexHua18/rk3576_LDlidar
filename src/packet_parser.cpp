@@ -66,6 +66,7 @@ bool PacketParser::parsePacket(const uint8_t *data, size_t size, PointCloud &clo
         return false;
     }
 
+    // 重新映射数据以便访问
     const Gen2Packet *packet = reinterpret_cast<const Gen2Packet *>(data);
 
     // 检查帧ID，如果是新帧则重置
@@ -270,6 +271,8 @@ void PacketParser::buildPointCloud(PointCloud &cloud)
             << ", 原始零点: " << zeroPointCount;
 }
 
+
+
 // 检查是否是一帧的结束
 bool PacketParser::isFrameEnd(const Gen2Packet *packet)
 {
@@ -278,10 +281,8 @@ bool PacketParser::isFrameEnd(const Gen2Packet *packet)
 
     if (isEnd)
     {
-        LD_INFO << "检测到帧结束标记: subFrameId=" << (int)packet->head.subFrameId
-                << ", startColId=" << (int)packet->head.startColId;
+        LD_INFO << "检测到帧结束标记(sub=31): FrameId=" << (int)packet->head.frameId;
     }
-
     return isEnd;
 }
 
@@ -422,12 +423,4 @@ void PacketParser::printDiagnostics()
             << ", 当前帧包数=" << (packets_.count(currentFrameId) ? packets_[currentFrameId] : 0)
             << ", 最大子帧ID=" << (int)maxSubFrameId
             << ", 最大起始列ID=" << (int)maxStartColId;
-}
-
-// 导出帧数据
-void PacketParser::dumpFrameData(const std::string &filename)
-{
-    // 此处实现将当前帧数据保存到文件的功能
-    // 暂时留空，根据需要实现
-    LD_INFO << "帧数据导出功能未实现: " << filename;
 }

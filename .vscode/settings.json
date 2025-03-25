@@ -7,6 +7,7 @@
         "cstddef": "cpp",
         "cstdio": "cpp",
         "cstdlib": "cpp",
+        "cstring": "cpp",
         "ctime": "cpp",
         "cwchar": "cpp",
         "cwctype": "cpp",
@@ -18,7 +19,9 @@
         "condition_variable": "cpp",
         "cstdint": "cpp",
         "deque": "cpp",
+        "list": "cpp",
         "map": "cpp",
+        "set": "cpp",
         "unordered_map": "cpp",
         "vector": "cpp",
         "exception": "cpp",
@@ -40,6 +43,7 @@
         "fstream": "cpp",
         "initializer_list": "cpp",
         "iosfwd": "cpp",
+        "iostream": "cpp",
         "istream": "cpp",
         "limits": "cpp",
         "mutex": "cpp",
@@ -49,35 +53,6 @@
         "stdexcept": "cpp",
         "streambuf": "cpp",
         "thread": "cpp",
-        "typeinfo": "cpp",
-        "cstring": "cpp",
-        "codecvt": "cpp",
-        "list": "cpp",
-        "set": "cpp",
-        "iomanip": "cpp",
-        "iostream": "cpp",
-        "compare": "cpp",
-        "complex": "cpp",
-        "concepts": "cpp",
-        "numbers": "cpp",
-        "semaphore": "cpp",
-        "stop_token": "cpp",
-        "cinttypes": "cpp"
-    },
-    "cmake.configureSettings": {
-        "CMAKE_C_COMPILER": "/home/alex/toolchain/aarch64-buildroot-linux-gnu_sdk-buildroot-rk3576/bin/aarch64-buildroot-linux-gnu-gcc",
-        "CMAKE_CXX_COMPILER": "/home/alex/toolchain/aarch64-buildroot-linux-gnu_sdk-buildroot-rk3576/bin/aarch64-buildroot-linux-gnu-g++"
-    },
-    "cmake.preferredGenerators": [
-        "Unix Makefiles"
-    ],
-    "cmake.configureOnOpen": false,
-    "cmake.configureOnEdit": false,
-    "cmake.automaticReconfigure": false,
-    "cmake.buildBeforeRun": true,
-    "cmake.skipConfigureIfCachePresent": true,
-    "cmake.configureArgs": [
-        "-DUSE_RK3576_TOOLCHAIN=ON"
-    ],
-    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools"
+        "typeinfo": "cpp"
+    }
 }

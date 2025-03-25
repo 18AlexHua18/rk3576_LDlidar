@@ -47,14 +47,13 @@ public:
     // 将点云写入文件（重载版本，修改参数顺序）
     bool WriteCloud(const PointCloud& cloud, const std::string& directory);
 
+    // 确保目录存在
+    static bool ensureDirectoryExists(const std::string& path);
+
 private:
     PointCloudCallback callback_;
     int file_index_;
     bool is_new_frame_; // 标记当前点云是否为新的一帧
-    
-    // 确保目录存在
-    bool ensureDirectoryExists(const std::string& path);
-
 };
 
 #endif // POINT_CLOUD_H

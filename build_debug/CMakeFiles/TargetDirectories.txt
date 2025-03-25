@@ -1,3 +1,0 @@
-/home/alex/Project/rk3576_LDlidar/build_debug/CMakeFiles/rebuild_cache.dir
-/home/alex/Project/rk3576_LDlidar/build_debug/CMakeFiles/edit_cache.dir
-/home/alex/Project/rk3576_LDlidar/build_debug/CMakeFiles/rk3576_LDlidar.dir
