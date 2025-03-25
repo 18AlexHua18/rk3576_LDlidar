@@ -69,10 +69,30 @@ bool PacketParser::parsePacket(const uint8_t *data, size_t size, PointCloud &clo
     // 重新映射数据以便访问
     const Gen2Packet *packet = reinterpret_cast<const Gen2Packet *>(data);
 
-    // 检查帧ID，如果是新帧则重置
-    if (!frameInProgress || packet->head.frameId != currentFrameId)
+    // 检查是否是新的帧ID
+    bool isNewFrame = false;
+    if (frameInProgress && ntohl(packet->head.frameId) != currentFrameId)
     {
-        currentFrameId = packet->head.frameId;
+        LD_WARN << "检测到新帧ID(" << ntohl(packet->head.frameId)
+                << ")，但上一帧(" << currentFrameId
+                << ")仅接收到" << packets_[currentFrameId] << "个包，强制结束上一帧";
+
+        // 处理未完成的上一帧数据
+        if (packets_[currentFrameId] > 0)
+        {
+            buildPointCloud(cloud);
+            LD_WARN << "强制结束上一帧，由" << packets_[currentFrameId] << "个包构建，点云大小：" << cloud.points.size();
+            isNewFrame = true;
+        }
+
+        // 重置为新帧
+        frameInProgress = false;
+    }
+
+    // 如果不是在处理一个帧或者是新帧，则初始化新帧
+    if (!frameInProgress || ntohl(packet->head.frameId) != currentFrameId)
+    {
+        currentFrameId = ntohl(packet->head.frameId);
         frameInProgress = true;
         packets_[currentFrameId] = 0;
         frameCloud.points.clear();
@@ -86,116 +106,64 @@ bool PacketParser::parsePacket(const uint8_t *data, size_t size, PointCloud &clo
     // 记录已收到的子帧和起始列
     receivedSubframes.insert(std::make_pair(packet->head.subFrameId, packet->head.startColId));
 
-    // 添加日志以检查包的关键信息
-    LD_DEBUG << "处理数据包: 子帧ID=" << (int)packet->head.subFrameId
-             << ", 起始列=" << (int)packet->head.startColId
-             << ", 帧ID=" << packet->head.frameId
-             << ", 当前包数=" << packets_[currentFrameId];
-
     // 处理有效的雷达数据包
     processPacket(packet);
 
-    // 检查是否为当前帧的结束包
-    bool frame_end = isFrameEnd(packet);
-
-    // 计算子帧覆盖率
-    int expectedSubframes = 32;                                                                           // 预期子帧数为32（0-31）
-    float subframeCompleteness = static_cast<float>(receivedSubframes.size()) / (expectedSubframes * 52); // 32个子帧 * 52列
-
-    // 更合理的帧结束判断
-    if (packets_[currentFrameId] > 1000 && subframeCompleteness > 0.9)
+    // 如果前面已经处理了未完成的旧帧，则直接返回
+    if (isNewFrame)
     {
-        LD_INFO << "帧数据已达到90%完整度，认为帧结束: 帧ID=" << currentFrameId
-                << ", 包数=" << packets_[currentFrameId]
-                << ", 子帧覆盖率=" << subframeCompleteness * 100 << "%";
-        frame_end = true;
+        return true;
     }
 
-    // 如果收到了大量包但子帧覆盖不完整，也可能是数据丢失，此时也结束帧
-    if (packets_[currentFrameId] > 1800 && !frame_end)
-    {
-        LD_WARN << "收到大量包但帧未完成，可能存在数据丢失，强制结束帧: 帧ID=" << currentFrameId
-                << ", 包数=" << packets_[currentFrameId]
-                << ", 子帧覆盖率=" << subframeCompleteness * 100 << "%";
-        frame_end = true;
-    }
-
-    // 检查是否已接收到足够多的子帧
-    if (receivedSubframes.size() >= expectedSubframes * 50)
-    { // 接近完整覆盖所有子帧和列
-        LD_INFO << "接收到足够多的子帧和列，认为帧结束: 帧ID=" << currentFrameId
-                << ", 子帧记录数=" << receivedSubframes.size();
-        frame_end = true;
-    }
+    // 判断帧是否结束，简化为检测是否达到1664个包
+    bool frame_end = (packets_[currentFrameId] >= 1664);
 
     if (frame_end)
     {
-        LD_INFO << "检测到帧结束，帧ID: " << packet->head.frameId
-                << ", 包数: " << packets_[currentFrameId]
-                << ", 子帧记录数: " << receivedSubframes.size();
+        LD_INFO << "检测到帧结束，帧ID: " << ntohl(packet->head.frameId)
+                << ", 包数: " << packets_[currentFrameId];
 
-        // 检查帧完整性 - 降低要求，如果有超过800个包也开始处理
-        if (packets_[currentFrameId] >= 800)
-        { // 降低阈值，之前是1600
-            // 构建点云
-            buildPointCloud(cloud);
+        // 构建点云
+        buildPointCloud(cloud);
 
-            // 检查点云大小
-            if (cloud.points.empty())
+        LD_WARN << "！！！点云构建完成，由" << packets_[currentFrameId] << "个包构建，点云大小：" << cloud.points.size();
+
+        // 检查点云大小
+        if (cloud.points.empty())
+        {
+            LD_WARN << "帧完整，但点云构建后为空！检查点云过滤条件。";
+
+            // 添加额外诊断信息
+            int validPointCount = 0;
+            for (int row = 0; row < cloudHeight; ++row)
             {
-                LD_WARN << "帧完整，但点云构建后为空！检查点云过滤条件。";
-
-                // 添加额外诊断信息
-                int validPointCount = 0;
-                for (int row = 0; row < cloudHeight; ++row)
+                for (int col = 0; col < cloudWidth; ++col)
                 {
-                    for (int col = 0; col < cloudWidth; ++col)
+                    for (int echo = 0; echo < 3; ++echo)
                     {
-                        for (int echo = 0; echo < 3; ++echo)
+                        Point3D &point = pointData_[row][col][echo];
+                        if (point.x != 0.0f || point.y != 0.0f || point.z != 0.0f)
                         {
-                            Point3D &point = pointData_[row][col][echo];
-                            if (point.x != 0.0f || point.y != 0.0f || point.z != 0.0f)
-                            {
-                                cloud.points.push_back(point);
-                                validPointCount++;
-                            }
+                            cloud.points.push_back(point);
+                            validPointCount++;
                         }
                     }
                 }
-
-                if (validPointCount > 0)
-                {
-                    LD_INFO << "手动添加有效点后，点云大小: " << cloud.points.size();
-                }
             }
-            else
+
+            if (validPointCount > 0)
             {
-                LD_INFO << "帧完整，点云大小: " << cloud.points.size();
+                LD_INFO << "手动添加有效点后，点云大小: " << cloud.points.size();
             }
-
-            // 重置当前帧
-            frameInProgress = false;
-            return true;
         }
         else
         {
-            LD_WARN << "帧数据不完整，接收到 " << packets_[currentFrameId]
-                    << " 个包，预期至少 800 个";
-            // 即使不完整，如果有一些包，也尝试构建点云
-            if (packets_[currentFrameId] > 100)
-            {
-                buildPointCloud(cloud);
-                if (!cloud.points.empty())
-                {
-                    LD_INFO << "尽管帧不完整，但仍然构建出点云，大小: " << cloud.points.size();
-                    frameInProgress = false;
-                    return true;
-                }
-            }
-            // 重置当前帧
-            frameInProgress = false;
-            return false;
+            LD_INFO << "帧完整，点云大小: " << cloud.points.size();
         }
+
+        // 重置当前帧
+        frameInProgress = false;
+        return true;
     }
 
     return false;
@@ -271,8 +239,6 @@ void PacketParser::buildPointCloud(PointCloud &cloud)
             << ", 原始零点: " << zeroPointCount;
 }
 
-
-
 // 检查是否是一帧的结束
 bool PacketParser::isFrameEnd(const Gen2Packet *packet)
 {
@@ -281,7 +247,7 @@ bool PacketParser::isFrameEnd(const Gen2Packet *packet)
 
     if (isEnd)
     {
-        LD_INFO << "检测到帧结束标记(sub=31): FrameId=" << (int)packet->head.frameId;
+        LD_INFO << "检测到帧结束标记(sub=31): FrameId=" << ntohl(packet->head.frameId);
     }
     return isEnd;
 }
